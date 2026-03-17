@@ -717,7 +717,7 @@ const PREV_CLOSE={
   'NOC':580.0,
   'RTX':204.52,
   'PANW':175.0,
-  'OKLO':21.0,
+  'OKLO':59.77,
   'SERV':9.5,
   'NVDA':177.89,
   'MSFT':408.96,
@@ -945,12 +945,19 @@ async function fetchFuturesREST(){
 
 // --- YAHOO FINANCE API (no CORS, no key needed) ------------------
 async function yahooQuote(sym){
-  try{
-    const r=await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1d`).then(x=>x.json());
-    const m=r?.chart?.result?.[0]?.meta;
-    if(!m||!m.regularMarketPrice)return null;
-    return{price:m.regularMarketPrice,prevClose:m.previousClose||m.chartPreviousClose};
-  }catch(e){return null;}
+  // Try direct first (works locally), then fall back to proxy (works from GitHub Pages)
+  const yUrl=`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1d`;
+  const urls=[yUrl, `https://api.allorigins.win/raw?url=${encodeURIComponent(yUrl)}`];
+  for(const url of urls){
+    try{
+      const r=await fetch(url,{signal:AbortSignal.timeout(8000)}).then(x=>x.json());
+      const m=r?.chart?.result?.[0]?.meta;
+      if(m&&m.regularMarketPrice){
+        return{price:m.regularMarketPrice,prevClose:m.previousClose||m.chartPreviousClose};
+      }
+    }catch(e){ /* try next */ }
+  }
+  return null;
 }
 async function yahooFundamentals(sym){
   try{
@@ -1318,7 +1325,11 @@ async function runAnalysis(){
         messages: [{ role: 'user', content: prompt }]
       })
     });
-    if(!resp.ok)throw new Error('API '+resp.status);
+    if(!resp.ok){
+      const errBody=await resp.json().catch(()=>({}));
+      const msg=errBody?.error?.message||JSON.stringify(errBody);
+      throw new Error('API '+resp.status+': '+msg.slice(0,200));
+    }
     const apiData=await resp.json(),text=apiData.content?.[0]?.text||'';
     const match=text.match(/\{[\s\S]*\}/);if(!match)throw new Error('No JSON');
     const analysis=JSON.parse(match[0]);analysisCache[sym]=analysis;renderAnalysis(analysis,sym,price);
